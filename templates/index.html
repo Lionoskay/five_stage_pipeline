@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MIPS 5-Stage Pipeline Simulator</title>
+<style>
+/* 全局 */
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',monospace;
+  background:#ffffff;color:#24292f;min-height:100vh}
+.container{max-width:100%;margin:0 auto;padding:8px 12px}
+
+/* 头部 */
+.header{display:flex;justify-content:space-between;align-items:center;
+  padding:8px 0;border-bottom:1px solid #d0d7de;margin-bottom:8px}
+.header h1{font-size:1.2em;color:#1f2328}
+.status-bar{display:flex;gap:16px;font-size:0.78em;align-items:center}
+.stat-item{padding:3px 10px;border-radius:10px;background:#f6f8fa}
+.stat-item.on{background:#dafbe1;color:#1a7f37}
+
+/* 时空图 */
+.timing-panel{background:#f6f8fa;border-radius:8px;border:1px solid #d0d7de;
+  padding:10px;margin-bottom:8px;overflow:hidden}
+.timing-panel h3{font-size:0.85em;color:#57606a;margin-bottom:8px;letter-spacing:1px}
+.timing-scroll{overflow-x:auto;max-height:500px}
+.timing-table{border-collapse:collapse;font-size:0.7em;white-space:nowrap}
+.timing-table th{background:#eaeef2;color:#57606a;padding:5px 10px;text-align:center;
+  font-weight:600;position:sticky;top:0;z-index:2;border-bottom:2px solid #d0d7de}
+.timing-table th.stage-header{text-align:right;padding-right:12px;
+  position:sticky;left:0;z-index:3;background:#f6f8fa;min-width:50px}
+.timing-table td{padding:4px 6px;text-align:center;border:1px solid #eaeef2;
+  min-width:90px;max-width:140px;transition:all 0.2s}
+.timing-table td.bubble{color:#d0d7de;background:#f6f8fa}
+.timing-table td .instr-label{font-weight:600;font-size:0.9em}
+.timing-table td .instr-pc{font-size:0.75em;color:#57606a;display:block}
+.timing-table td.flushed{text-decoration:line-through;opacity:0.5}
+.timing-table td.stall-repeat{background:rgba(191,137,0,0.1)}
+.timing-table td.fwd-from{position:relative}
+.timing-table td.fwd-from::after{content:'FWD';position:absolute;bottom:1px;right:3px;
+  font-size:0.6em;color:#1a7f37}
+
+/* 指令颜色 - 12色浅色版 */
+.i0{border-left:3px solid #0969da;background:rgba(9,105,218,0.06)}
+.i1{border-left:3px solid #cf222e;background:rgba(207,34,46,0.06)}
+.i2{border-left:3px solid #1a7f37;background:rgba(26,127,55,0.06)}
+.i3{border-left:3px solid #8250df;background:rgba(130,80,223,0.06)}
+.i4{border-left:3px solid #bf8700;background:rgba(191,135,0,0.06)}
+.i5{border-left:3px solid #0550ae;background:rgba(5,80,174,0.06)}
+.i6{border-left:3px solid #bf3989;background:rgba(191,57,137,0.06)}
+.i7{border-left:3px solid #218bff;background:rgba(33,139,255,0.06)}
+.i8{border-left:3px solid #a40e26;background:rgba(164,14,38,0.06)}
+.i9{border-left:3px solid #117f32;background:rgba(17,127,50,0.06)}
+.i10{border-left:3px solid #9a6700;background:rgba(154,103,0,0.06)}
+.i11{border-left:3px solid #6e40c9;background:rgba(110,64,201,0.06)}
+
+/* 阶段格颜色 */
+.stage-cell{font-weight:600;font-size:0.85em;padding:4px 8px;min-width:55px}
+.stage-IF{background:rgba(9,105,218,0.12);color:#0550ae}
+.stage-ID{background:rgba(26,127,55,0.1);color:#117f32}
+.stage-EX{background:rgba(191,135,0,0.1);color:#9a6700}
+.stage-MEM{background:rgba(207,34,46,0.08);color:#a40e26}
+.stage-WB{background:rgba(130,80,223,0.08);color:#6e40c9}
+.stage-cell.stalled{color:#cf222e}
+
+/* 当前周期高亮列 */
+.timing-table col.cur-cycle{background:rgba(9,105,218,0.03)}
+
+/* 底部面板 */
+.bottom-grid{display:grid;grid-template-columns:1.2fr 0.8fr;gap:8px;margin-bottom:8px}
+
+.panel{background:#f6f8fa;border-radius:8px;border:1px solid #d0d7de;padding:10px}
+.panel h4{font-size:0.75em;color:#57606a;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px}
+
+/* 表格 */
+.data-table{border-collapse:collapse;width:100%;font-size:0.7em}
+.data-table th{background:#eaeef2;color:#57606a;padding:3px 8px;text-align:left;font-weight:500;
+  position:sticky;top:0}
+.data-table td{padding:2px 8px;border-bottom:1px solid #eaeef2;font-family:monospace}
+.data-table tr.changed td{background:rgba(191,137,0,0.08)}
+.data-table tr.flushed td{opacity:0.35;text-decoration:line-through}
+.data-table tr.done td{opacity:0.4}
+.scroll-table{max-height:260px;overflow-y:auto}
+
+.stage-badge{padding:1px 6px;border-radius:3px;font-size:0.8em;color:#fff}
+.badge-if{background:#0969da}.badge-id{background:#1a7f37}.badge-ex{background:#bf8700}
+.badge-mem{background:#cf222e}.badge-wb{background:#8250df}.badge-done{background:#d0d7de;color:#57606a}
+
+.addr{color:#0969da;font-family:monospace}
+
+/* 段间寄存器 */
+.preg-row{display:flex;gap:4px;font-size:0.68em;flex-wrap:wrap}
+.preg-card{flex:1;min-width:100px;border:1px solid #d0d7de;border-radius:5px;padding:5px 7px}
+.preg-card h5{font-size:0.85em;margin-bottom:3px}
+.preg-card .field{margin:1px 0;color:#57606a}
+.preg-card .ctrl-yes{color:#1a7f37}.preg-card .ctrl-no{color:#cf222e}
+.preg-ifid h5{color:#0969da}.preg-idex h5{color:#1a7f37}
+.preg-exmem h5{color:#bf8700}.preg-memwb h5{color:#8250df}
+
+/* 控制栏 */
+.controls{background:#f6f8fa;border-radius:8px;border:1px solid #d0d7de;padding:10px}
+.ctrl-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
+.ctrl-row:last-child{margin-bottom:0}
+.ctrl-row b{font-size:0.75em;color:#57606a}
+.btn{padding:5px 14px;border:none;border-radius:5px;cursor:pointer;
+  font-size:0.78em;font-weight:600;color:#fff;transition:all 0.15s}
+.btn:hover{filter:brightness(1.1)}
+.btn-step{background:#0969da}.btn-run{background:#1a7f37}.btn-pause{background:#9a6700}
+.btn-reset{background:#6e7781}.btn-load{background:#1a7f37}.btn-clear{background:#6e7781}
+.btn-danger{background:#cf222e}
+.btn:disabled{opacity:0.35;cursor:not-allowed;filter:none}
+.btn-sm{padding:3px 8px;font-size:0.7em}
+
+input,select,textarea{background:#ffffff;color:#24292f;border:1px solid #d0d7de;
+  border-radius:4px;padding:4px 8px;font-size:0.75em;font-family:inherit}
+textarea{font-family:'SF Mono','Courier New',monospace;resize:vertical;width:100%;min-height:60px}
+input[type="range"]{padding:0;cursor:pointer}
+
+/* 转发开关 */
+.toggle{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:0.8em}
+.toggle input{display:none}
+.toggle-knob{width:38px;height:20px;border-radius:10px;background:#d0d7de;position:relative;transition:0.25s}
+.toggle-knob::after{content:'';position:absolute;width:16px;height:16px;border-radius:50%;
+  background:#fff;top:2px;left:2px;transition:0.25s}
+.toggle input:checked+.toggle-knob{background:#1a7f37}
+.toggle input:checked+.toggle-knob::after{left:20px}
+
+/* 断点标签 */
+.bp-tag{display:inline-flex;align-items:center;gap:3px;padding:2px 8px;
+  border-radius:10px;background:#eaeef2;font-size:0.7em;cursor:pointer}
+.bp-tag:hover{background:#ffd8d3}
+.stage-cb{display:inline-flex;align-items:center;gap:3px;font-size:0.75em;cursor:pointer;margin-right:6px}
+
+/* 事件日志 */
+.event-log{background:#ffffff;border-radius:5px;padding:6px 10px;max-height:90px;
+  overflow-y:auto;font-size:0.68em;font-family:monospace;border:1px solid #d0d7de}
+.event-stall{color:#9a6700}.event-forward{color:#1a7f37}
+.event-flush{color:#cf222e}.event-bp{color:#8250df}.event-info{color:#57606a}
+
+/* Toast */
+.toast{position:fixed;top:16px;right:16px;padding:8px 16px;border-radius:6px;
+  color:#fff;font-weight:600;font-size:0.8em;z-index:999;animation:toastIn 0.25s}
+.toast-ok{background:#1a7f37}.toast-err{background:#cf222e}.toast-info{background:#0969da}
+@keyframes toastIn{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- ═══════ 头部 ═══════ -->
+<div class="header">
+  <h1>MIPS 五段流水线模拟器</h1>
+  <div class="status-bar">
+    <span>周期: <b id="h-cycle">0</b></span>
+    <span>PC: <b id="h-pc">0x0000</b></span>
+    <span>CPI: <b id="h-cpi">-</b></span>
+    <span id="h-fwd" class="stat-item on">FWD: ON</span>
+    <span id="h-run">就绪</span>
+  </div>
+</div>
+
+<!-- ═══════ 时空图 ═══════ -->
+<div class="timing-panel">
+  <h3>流水线时空图 (横轴=时钟周期, 纵轴=流水段)</h3>
+  <div class="timing-scroll" id="timing-container">
+    <table class="timing-table" id="timing-table">
+      <thead id="timing-head"></thead>
+      <tbody id="timing-body"></tbody>
+    </table>
+  </div>
+  <div style="font-size:0.65em;color:#8b949e;margin-top:4px">
+    图例: 每个彩色块 = 一条指令, 横跨时从左到右 = 逐周期推进,
+    斜向移动 = 流水线正常运转, 同列多色 = 多指令并行
+  </div>
+</div>
+
+<!-- ═══════ 底部双列 ═══════ -->
+<div class="bottom-grid">
+
+<!-- 左列 -->
+<div>
+  <!-- 指令列表 -->
+  <div class="panel">
+    <h4>指令列表</h4>
+    <div class="scroll-table">
+      <table class="data-table" id="instr-table">
+        <thead><tr><th width="60">地址</th><th>指令</th><th width="70">状态</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 段间寄存器 -->
+  <div class="panel">
+    <h4>当前周期的段间寄存器</h4>
+    <div class="preg-row" id="preg-row"></div>
+  </div>
+</div>
+
+<!-- 右列 -->
+<div>
+  <!-- 寄存器堆 -->
+  <div class="panel">
+    <h4>寄存器堆 (黄色=本周期变化)</h4>
+    <div class="scroll-table" style="max-height:320px">
+      <table class="data-table" id="reg-table">
+        <thead><tr><th>寄存器</th><th>值</th><th>寄存器</th><th>值</th>
+                   <th>寄存器</th><th>值</th><th>寄存器</th><th>值</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 数据内存 + 统计 -->
+  <div class="panel">
+    <h4>数据内存 & 统计</h4>
+    <div style="display:flex;gap:15px">
+      <div style="flex:1">
+        <div class="scroll-table" style="max-height:100px">
+          <table class="data-table" id="mem-table">
+            <thead><tr><th>地址</th><th>值</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div style="flex:1;font-size:0.7em;line-height:1.6" id="stats-box"></div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ═══════ 控制栏 ═══════ -->
+<div class="controls">
+  <div class="ctrl-row">
+    <button class="btn btn-step" onclick="doStep()" id="btn-step">Space 单步</button>
+    <button class="btn btn-run" onclick="doRun()" id="btn-run">R 运行</button>
+    <button class="btn btn-pause" onclick="doPause()" id="btn-pause" disabled>P 暂停</button>
+    <button class="btn btn-reset" onclick="doReset()">重置</button>
+    <span style="margin-left:8px">速度:</span>
+    <input type="range" id="speed" min="100" max="2000" value="500" step="100"
+           oninput="setSpeed(this.value)" style="width:100px">
+    <span id="speed-label" style="font-size:0.72em">500ms</span>
+
+    <span style="margin-left:12px">PC断点:</span>
+    <span id="bp-tags"></span>
+    <input type="text" id="bp-inp" placeholder="0x08" size="5" style="font-family:monospace">
+    <button class="btn btn-step btn-sm" onclick="addPcBp()">+</button>
+    <span style="margin-left:8px">段断点:</span>
+    <label class="stage-cb"><input type="checkbox" id="bp-IF" onchange="toggleStageBp('IF')">IF</label>
+    <label class="stage-cb"><input type="checkbox" id="bp-ID" onchange="toggleStageBp('ID')">ID</label>
+    <label class="stage-cb"><input type="checkbox" id="bp-EX" onchange="toggleStageBp('EX')">EX</label>
+    <label class="stage-cb"><input type="checkbox" id="bp-MEM" onchange="toggleStageBp('MEM')">MEM</label>
+    <label class="stage-cb"><input type="checkbox" id="bp-WB" onchange="toggleStageBp('WB')">WB</label>
+
+    <label class="toggle" style="margin-left:12px">
+      <input type="checkbox" id="fwd-cb" checked onchange="toggleFwd(this.checked)">
+      <span class="toggle-knob"></span> FWD
+    </label>
+  </div>
+
+  <div class="ctrl-row">
+    <b>程序:</b>
+    <input type="file" id="file-inp" accept=".txt" onchange="loadFile(this)" style="font-size:0.7em">
+    <select id="preset-sel" onchange="loadPreset(this.value)" style="font-size:0.7em">
+      <option value="">-- 预设文件 --</option>
+    </select>
+    <button class="btn btn-load btn-sm" onclick="doLoad()">载入</button>
+    <button class="btn btn-clear btn-sm" onclick="clearCode()">清空</button>
+  </div>
+  <div class="ctrl-row">
+    <textarea id="code-inp" placeholder="在此输入 MIPS 指令...&#10;addi r1, r0, 100&#10;addi r2, r0, 200&#10;add r3, r1, r2&#10;sw r3, 0(r0)&#10;lw r5, 0(r0)"></textarea>
+  </div>
+  <div class="event-log" id="event-log"></div>
+</div>
+
+</div>
+
+<script>
+// ═══════════════ 状态 ═══════════════
+let state = null;
+let runTimer = null;
+let speedMs = 500;
+let prevRegs = {};
+let cycleHistory = [];  // [{cycle, stages:{IF:{instr,pc,bubble}, ID, EX, MEM, WB}}]
+
+// ═══════════════ API ═══════════════
+async function api(url, opts={}) {
+  const r = await fetch(url, opts);
+  if (!r.ok) { const e = await r.json().catch(()=>({})); toast(e.error||'请求失败','err'); return null; }
+  return r.json();
+}
+async function refresh() { state = await api('/api/state'); if(state) renderAll(state); }
+
+async function doStep() {
+  state = await api('/api/step', {method:'POST'});
+  if (!state) return;
+  renderAll(state);
+  recordCycle(state);
+  if (state.paused_by) showPause(state.paused_by);
+}
+async function doRun() {
+  state = await api('/api/state'); if (!state) return;
+  state.running = true;
+  await api('/api/step', {method:'POST'});
+  state = await api('/api/state'); if (!state) return;
+  state.running = true;
+  renderAll(state); recordCycle(state);
+  document.getElementById('btn-run').disabled = true;
+  document.getElementById('btn-pause').disabled = false;
+  document.getElementById('h-run').textContent = '运行中';
+  runTimer = setInterval(runTick, speedMs);
+}
+async function runTick() {
+  state = await api('/api/run', {method:'POST'});
+  if (!state || !state.running) { stopRun(); return; }
+  renderAll(state);
+  recordCycle(state);
+}
+function stopRun(msg) {
+  if (runTimer) { clearInterval(runTimer); runTimer = null; }
+  document.getElementById('btn-run').disabled = false;
+  document.getElementById('btn-pause').disabled = true;
+  document.getElementById('h-run').textContent = msg || '就绪';
+}
+async function doPause() {
+  state = await api('/api/pause', {method:'POST'});
+  if (state) renderAll(state);
+  stopRun('已暂停');
+}
+async function doReset() {
+  stopRun('已重置');
+  cycleHistory = [];
+  state = await api('/api/reset', {method:'POST'});
+  if (state) renderAll(state);
+}
+
+function setSpeed(v) { speedMs=+v; document.getElementById('speed-label').textContent=v+'ms'; }
+async function toggleFwd(on) {
+  state = await api('/api/forwarding', {method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({enabled:on})});
+  if (state) renderAll(state);
+}
+function clearCode() { document.getElementById('code-inp').value = ''; }
+function loadFile(inp) {
+  const f = inp.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = e => { document.getElementById('code-inp').value = e.target.result; };
+  r.readAsText(f);
+}
+async function loadPreset(fn) {
+  if (!fn) return;
+  const res = await fetch('/api/load', {method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({filename:fn})});
+  const r = await res.json();
+  if (r.error) { toast(r.error,'err'); return; }
+  state = r; cycleHistory = []; prevRegs = {};
+  renderAll(state);
+  document.getElementById('code-inp').value = state.instructions.map(i=>i.text).join('\n');
+  toast(`已加载 ${fn}`,'ok');
+}
+async function doLoad() {
+  stopRun('就绪');
+  const code = document.getElementById('code-inp').value;
+  if (!code.trim()) { toast('请输入指令','err'); return; }
+  const res = await fetch('/api/load', {method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({code})});
+  const r = await res.json();
+  if (r.error) { toast(r.error,'err'); return; }
+  state = r; cycleHistory = []; prevRegs = {};
+  renderAll(state);
+  toast(`已加载 ${state.instructions.length} 条指令`,'ok');
+}
+// ── 载入预设文件列表 ──────────────────
+(async () => {
+  const files = await api('/api/files');
+  if (files) files.forEach(f => {
+    const o = document.createElement('option'); o.value=f; o.textContent=f;
+    document.getElementById('preset-sel').appendChild(o);
+  });
+  refresh();
+})();
+
+// ═══════════════ 断点 ═══════════════
+async function addPcBp() {
+  const v = parseInt(document.getElementById('bp-inp').value);
+  if (isNaN(v)) { toast('无效地址','err'); return; }
+  state = await api('/api/breakpoint/set', {method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({type:'pc',address:v})});
+  document.getElementById('bp-inp').value = '';
+  if (state) renderAll(state);
+}
+async function delPcBp(a) {
+  state = await api('/api/breakpoint/del', {method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({type:'pc',address:a})});
+  if (state) renderAll(state);
+}
+async function toggleStageBp(stage) {
+  const on = document.getElementById('bp-'+stage).checked;
+  const url = on ? '/api/breakpoint/set' : '/api/breakpoint/del';
+  state = await api(url, {method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({type:'stage',stage})});
+  if (state) renderAll(state);
+}
+function showPause(reason) {
+  if (!reason) return;
+  if (reason.startsWith('stage:')) toast(`断点: 指令进入 ${reason.split(':')[1]} 段`,'info');
+  else if (reason.startsWith('pc:')) toast(`断点: PC = ${reason.split(':')[1]}`,'info');
+  else if (reason === 'complete') { toast('程序执行完毕','ok'); stopRun('完成'); }
+}
+
+// ═══════════════ 历史记录 ═══════════════
+function recordCycle(s) {
+  cycleHistory.push({
+    cycle: s.cycle,
+    stages: {
+      IF: {...s.stages.IF},
+      ID: {...s.stages.ID},
+      EX: {...s.stages.EX},
+      MEM: {...s.stages.MEM},
+      WB: {...s.stages.WB},
+    },
+    forwarding: (s.forwarding || []).map(f => ({...f})),
+  });
+}
+
+// ═══════════════ 渲染主入口 ═══════════════
+function renderAll(s) {
+  state = s;
+  document.getElementById('h-cycle').textContent = s.cycle;
+  document.getElementById('h-pc').textContent = '0x'+s.pc.toString(16).toUpperCase().padStart(4,'0');
+  document.getElementById('h-cpi').textContent = s.stats.cpi;
+  const fwdEl = document.getElementById('h-fwd');
+  fwdEl.textContent = 'FWD: '+(s.forwarding_on?'ON':'OFF');
+  fwdEl.className = 'stat-item '+(s.forwarding_on?'on':'');
+  document.getElementById('fwd-cb').checked = s.forwarding_on;
+
+  renderTiming(s);
+  renderPipelineRegs(s);
+  renderRegisters(s);
+  renderInstructions(s);
+  renderMemory(s);
+  renderStats(s);
+  renderBreakpoints(s);
+  renderEvents(s);
+  // 滚动到最新周期
+  const container = document.getElementById('timing-container');
+  if (container) container.scrollLeft = container.scrollWidth;
+}
+
+// ═══════════════ 时空图 ═══════════════
+function renderTiming(s) {
+  const thead = document.getElementById('timing-head');
+  const tbody = document.getElementById('timing-body');
+  const stages = ['IF','ID','EX','MEM','WB'];
+  const hist = [...cycleHistory];
+
+  // 构建指令数据: pc → {text, cycles: {cycle_num → stage}}
+  const instrData = {};
+  const instrOrder = [];
+
+  function addInstr(pc, text, cycle, stage) {
+    if (pc === null || pc === undefined) return;
+    if (!instrData[pc]) {
+      instrData[pc] = { text: text, cycles: {} };
+      instrOrder.push(pc);
+    }
+    instrData[pc].cycles[cycle] = stage;
+    if (text && text.length > (instrData[pc].text||'').length) {
+      instrData[pc].text = text;
+    }
+  }
+
+  // 遍历历史
+  hist.forEach(rec => {
+    stages.forEach(stage => {
+      const st = rec.stages[stage];
+      if (st && !st.bubble && st.instr) addInstr(st.pc, st.instr, rec.cycle, stage);
+    });
+  });
+
+  // 遍历当前状态
+  stages.forEach(stage => {
+    const st = s.stages[stage];
+    if (st && !st.bubble && st.instr) addInstr(st.pc, st.instr, s.cycle, stage);
+  });
+
+  // 标记已刷洗/已完成的指令
+  if (state.instructions) {
+    state.instructions.forEach(inst => {
+      if (instrData[inst.addr]) {
+        if (inst.flushed) instrData[inst.addr].flushed = true;
+        if (inst.done) instrData[inst.addr].done = true;
+      }
+    });
+  }
+
+  // 按地址排序
+  instrOrder.sort((a, b) => +a - +b);
+
+  const maxCycle = s.cycle;
+
+  // 表头：指令 | CC1 | CC2 | ... | CCN+1
+  let headHtml = '<tr><th class="stage-header">指令</th>';
+  for (let c = 1; c <= maxCycle + 1; c++) {
+    if (c === maxCycle) {
+      headHtml += `<th style="background:#dafbe1">CC${c}</th>`;
+    } else if (c > maxCycle) {
+      headHtml += `<th style="color:#8c959f">CC${c}</th>`;
+    } else {
+      headHtml += `<th>CC${c}</th>`;
+    }
+  }
+  headHtml += '</tr>';
+  thead.innerHTML = headHtml;
+
+  // 表体：每行一条指令
+  let bodyHtml = '';
+  instrOrder.forEach(pc => {
+    const data = instrData[pc];
+    const pcStr = '0x' + (+pc).toString(16).toUpperCase().padStart(4, '0');
+    const text = data.text.length > 24 ? data.text.substring(0, 22) + '…' : data.text;
+    const flushedCls = data.flushed ? ' flushed' : '';
+
+    bodyHtml += `<tr><th class="stage-header" style="font-size:0.72em;text-align:right;padding-right:8px;white-space:nowrap">
+      <span style="font-weight:600;${data.flushed?'text-decoration:line-through;':''}">${esc(text)}</span>
+      <span style="font-size:0.78em;color:#57606a;display:block">${pcStr}</span>
+    </th>`;
+
+    for (let c = 1; c <= maxCycle + 1; c++) {
+      const stage = data.cycles[c];
+      const isCur = (c === maxCycle);
+      const prevSame = stage && data.cycles[c - 1] === stage;
+      const nextSame = stage && data.cycles[c + 1] === stage;
+      // 停顿起因：首次检测到冲突，下一周期仍在本段 → 标红，保留段名
+      const isStallCause = nextSame && !prevSame;
+      // 停顿中段：前后都是同一段 → 显示 STALL
+      const isStallMid = prevSame && nextSame;
+      const stallCls = (isStallCause || isStallMid) ? ' stalled' : '';
+      const display = isStallMid ? 'STALL' : stage;
+      if (stage) {
+        bodyHtml += `<td class="stage-cell stage-${stage}${isCur ? ' cur-cycle' : ''}${stallCls}${flushedCls}"
+          data-pc="${pc}" data-col="${c}" data-stage="${stage}">${display}</td>`;
+      } else {
+        bodyHtml += `<td class="bubble${flushedCls}" data-pc="${pc}" data-col="${c}">·</td>`;
+      }
+    }
+
+    bodyHtml += '</tr>';
+  });
+
+  tbody.innerHTML = bodyHtml;
+
+  // 绘制转发箭头
+  drawForwardingArrows(hist, s, instrData);
+}
+
+function drawForwardingArrows(hist, s, instrData) {
+  const table = document.getElementById('timing-table');
+  let svg = document.getElementById('fwd-svg');
+  if (!svg) {
+    svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.id = 'fwd-svg';
+    svg.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:10;overflow:visible';
+    const scrollDiv = document.getElementById('timing-container');
+    scrollDiv.style.position = 'relative';
+    scrollDiv.appendChild(svg);
+  }
+
+  // 收集所有转发事件，附上周期号
+  const allFwds = [];
+  hist.forEach(rec => {
+    if (rec.forwarding) {
+      rec.forwarding.forEach(f => allFwds.push({...f, cycle: rec.cycle}));
+    }
+  });
+  if (s.forwarding && s.forwarding.length > 0) {
+    s.forwarding.forEach(f => allFwds.push({...f, cycle: s.cycle}));
+  }
+
+  if (allFwds.length === 0) { svg.innerHTML = ''; svg.setAttribute('width','0'); svg.setAttribute('height','0'); return; }
+
+  const tableW = table.offsetWidth;
+  const tableH = table.offsetHeight;
+  svg.setAttribute('width', tableW);
+  svg.setAttribute('height', tableH);
+  svg.style.width = tableW + 'px';
+  svg.style.height = tableH + 'px';
+
+  let arrows = '';
+  allFwds.forEach(f => {
+    const fwdCycle = f.cycle;
+
+    // 目标格：目的指令在当前周期（EX 段消费转发数据）
+    const dstCol = fwdCycle;
+    const dstCell = table.querySelector(`td[data-pc="${f.to_addr}"][data-col="${dstCol}"]`);
+
+    // 源格：查找源指令处于 src_stage 的周期
+    const srcStage = f.src_stage || 'EX';
+    const srcInfo = instrData[f.from_addr];
+    let srcCol = null;
+    if (srcInfo) {
+      for (let c = fwdCycle; c >= 1; c--) {
+        if (srcInfo.cycles[c] === srcStage) { srcCol = c; break; }
+      }
+    }
+    if (srcCol === null) return;
+    const srcCell = table.querySelector(`td[data-pc="${f.from_addr}"][data-col="${srcCol}"]`);
+    if (!srcCell || !dstCell) return;
+
+    const srcRect = srcCell.getBoundingClientRect();
+    const dstRect = dstCell.getBoundingClientRect();
+    const tableRect = table.getBoundingClientRect();
+
+    const srcCX = srcRect.left - tableRect.left + srcRect.width / 2;
+    const srcCY = srcRect.top - tableRect.top + srcRect.height / 2;
+    const dstCX = dstRect.left - tableRect.left + dstRect.width / 2;
+    const dstCY = dstRect.top - tableRect.top + dstRect.height / 2;
+
+    const dx = dstCX - srcCX;
+    const dy = dstCY - srcCY;
+    let x1, y1, x2, y2;
+
+    if (Math.abs(dy) > Math.abs(dx)) {
+      x1 = srcCX;
+      y1 = srcRect.top - tableRect.top + srcRect.height * 0.25;
+      x2 = dstCX;
+      y2 = dstRect.bottom - tableRect.top - dstRect.height * 0.25;
+    } else {
+      x1 = srcRect.right - tableRect.left - srcRect.width * 0.25;
+      y1 = srcCY;
+      x2 = dstRect.left - tableRect.left + dstRect.width * 0.25;
+      y2 = dstCY;
+    }
+
+    arrows += `<path d="M${x1},${y1} L${x2},${y2}"
+      stroke="#1a7f37" stroke-width="1.5" fill="none" marker-end="url(#arrowhead)" opacity="0.7">
+      <title>转发 r${f.register}: 0x${f.from_addr.toString(16)} → 0x${f.to_addr.toString(16)}</title>
+      </path>`;
+  });
+
+  svg.innerHTML = `
+    <defs>
+      <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="0" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#1a7f37" />
+      </marker>
+    </defs>
+    ${arrows}
+  `;
+}
+
+
+
+// ═══════════════ 段间寄存器 ═══════════════
+function renderPipelineRegs(s) {
+  const pr = s.pipeline_regs;
+  function boolIcon(v) { return v ? '<span class="ctrl-yes">✓</span>' : '<span class="ctrl-no">✗</span>'; }
+  function hx(v) { return typeof v==='number' ? '0x'+v.toString(16).toUpperCase() : String(v||'-'); }
+
+  const cards = [
+    { key:'IF_ID', title:'IF/ID', cls:'preg-ifid', fields:[
+      ['指令',pr.IF_ID.instruction||'(空)'],
+      ['PC+4',hx(pr.IF_ID.pc_plus_4)],
+      ['地址',hx(pr.IF_ID.instr_addr)],
+      ['op',pr.IF_ID.op||'-'],
+    ]},
+    { key:'ID_EX', title:'ID/EX', cls:'preg-idex', fields:[
+      ['op',pr.ID_EX.op||'-'],
+      ['地址',hx(pr.ID_EX.instr_addr)],
+      ['RegA',pr.ID_EX.reg_a], ['RegB',pr.ID_EX.reg_b],
+      ['Imm',pr.ID_EX.imm], ['rd','r'+(pr.ID_EX.rd??'-')],
+      ['rs','r'+(pr.ID_EX.rs??'-')], ['rt','r'+(pr.ID_EX.rt??'-')],
+      ['RegW',boolIcon(pr.ID_EX.controls.reg_write)],
+      ['MemR',boolIcon(pr.ID_EX.controls.mem_read)],
+      ['MemW',boolIcon(pr.ID_EX.controls.mem_write)],
+      ['ALUSrc',boolIcon(pr.ID_EX.controls.alu_src)],
+      ['Branch',boolIcon(pr.ID_EX.controls.branch)],
+    ]},
+    { key:'EX_MEM', title:'EX/MEM', cls:'preg-exmem', fields:[
+      ['op',pr.EX_MEM.op||'-'],
+      ['地址',hx(pr.EX_MEM.instr_addr)],
+      ['ALUOut',pr.EX_MEM.alu_result], ['RegB',pr.EX_MEM.reg_b],
+      ['rd','r'+(pr.EX_MEM.rd??'-')],
+      ['RegW',boolIcon(pr.EX_MEM.controls.reg_write)],
+      ['MemR',boolIcon(pr.EX_MEM.controls.mem_read)],
+      ['MemW',boolIcon(pr.EX_MEM.controls.mem_write)],
+      ['MtoReg',boolIcon(pr.EX_MEM.controls.mem_to_reg)],
+    ]},
+    { key:'MEM_WB', title:'MEM/WB', cls:'preg-memwb', fields:[
+      ['op',pr.MEM_WB.op||'-'],
+      ['地址',hx(pr.MEM_WB.instr_addr)],
+      ['MemData',pr.MEM_WB.mem_data], ['ALUOut',pr.MEM_WB.alu_result],
+      ['rd','r'+(pr.MEM_WB.rd??'-')],
+      ['RegW',boolIcon(pr.MEM_WB.controls.reg_write)],
+      ['MtoReg',boolIcon(pr.MEM_WB.controls.mem_to_reg)],
+    ]},
+  ];
+
+  document.getElementById('preg-row').innerHTML = cards.map(c => {
+    const isEmpty = c.key === 'IF_ID' ? !pr[c.key].instruction : !pr[c.key].controls?.reg_write;
+    return `<div class="preg-card ${c.cls}" style="opacity:${isEmpty?0.4:1}">
+      <h5>${c.title}</h5>
+      ${c.fields.map(([l,v]) => `<div class="field">${l}: ${v}</div>`).join('')}
+    </div>`;
+  }).join('');
+}
+
+// ═══════════════ 寄存器堆 ═══════════════
+function renderRegisters(s) {
+  const tbody = document.getElementById('reg-table').querySelector('tbody');
+  let rows = '';
+  for (let r = 0; r < 8; r++) {
+    let cells = '';
+    let rowChanged = false;
+    for (let c = 0; c < 4; c++) {
+      const num = r + c * 8;
+      const val = s.registers[num] || 0;
+      const changed = prevRegs[num] !== undefined && prevRegs[num] !== val;
+      if (changed) rowChanged = true;
+      cells += `<td style="${num===0?'color:#8c959f':''}">r${num}</td>`;
+      cells += `<td style="${changed?'background:rgba(191,137,0,0.12)':''}">0x${(val>>>0).toString(16).toUpperCase().padStart(8,'0')}</td>`;
+    }
+    rows += `<tr class="${rowChanged?'changed':''}">${cells}</tr>`;
+  }
+  tbody.innerHTML = rows;
+  for (let r = 0; r < 32; r++) prevRegs[r] = s.registers[r] || 0;
+}
+
+// ═══════════════ 指令列表 ═══════════════
+function renderInstructions(s) {
+  const tbody = document.getElementById('instr-table').querySelector('tbody');
+  tbody.innerHTML = s.instructions.map(inst => {
+    const isPC = inst.addr === s.pc;
+    const cls = inst.flushed ? 'flushed' : (inst.done ? 'done' : (isPC ? 'changed' : ''));
+    const stage = inst.stage || (inst.done ? 'DONE' : (inst.flushed ? 'FLUSHED' : '-'));
+    const badgeMap = {IF:'badge-if',ID:'badge-id',EX:'badge-ex',MEM:'badge-mem',WB:'badge-wb',DONE:'badge-done',FLUSHED:''};
+    const badgeCls = badgeMap[stage] || '';
+    return `<tr class="${cls}">
+      <td class="addr">${isPC?'▶ ':''}0x${inst.addr.toString(16).toUpperCase().padStart(4,'0')}</td>
+      <td style="font-family:monospace">${esc(inst.text)}</td>
+      <td><span class="stage-badge ${badgeCls}">${stage}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+// ═══════════════ 数据内存 ═══════════════
+function renderMemory(s) {
+  const tbody = document.getElementById('mem-table').querySelector('tbody');
+  const addrs = Object.keys(s.data_memory).sort((a,b)=>+a-+b);
+  tbody.innerHTML = addrs.length === 0
+    ? '<tr><td colspan="2" style="color:#8c959f">(未访问)</td></tr>'
+    : addrs.map(a => `<tr><td class="addr">0x${(+a).toString(16).toUpperCase().padStart(4,'0')}</td>
+      <td>0x${s.data_memory[a].toString(16).toUpperCase().padStart(8,'0')}</td></tr>`).join('');
+}
+
+// ═══════════════ 统计 ═══════════════
+function renderStats(s) {
+  const st = s.stats;
+  document.getElementById('stats-box').innerHTML = `
+    总周期: <b>${st.total_cycles}</b><br>
+    完成指令: <b>${st.completed_instructions}</b><br>
+    CPI: <b>${st.cpi}</b><br>
+    数据停顿: <b>${st.data_stalls}</b><br>
+    Load-Use: <b>${st.load_use_stalls}</b><br>
+    控制停顿: <b>${st.control_stalls}</b><br>
+    转发避免: <b>${st.forwarding_saved}</b>`;
+}
+
+// ═══════════════ 断点 ═══════════════
+function renderBreakpoints(s) {
+  document.getElementById('bp-tags').innerHTML = (s.breakpoints.pc||[]).map(a =>
+    `<span class="bp-tag" onclick="delPcBp(${a})">0x${a.toString(16).toUpperCase().padStart(4,'0')} ×</span>`
+  ).join(' ');
+  ['IF','ID','EX','MEM','WB'].forEach(st => {
+    const cb = document.getElementById('bp-'+st);
+    if (cb) cb.checked = (s.breakpoints.stages||[]).includes(st);
+  });
+}
+
+// ═══════════════ 事件日志 ═══════════════
+function renderEvents(s) {
+  const div = document.getElementById('event-log');
+  if (!s.events || s.events.length === 0) {
+    div.innerHTML = '<span style="color:#8c959f">[无事件]</span>'; return;
+  }
+  div.innerHTML = s.events.map(e => {
+    let c = 'event-info';
+    if (/stall|停顿|cannot/i.test(e)) c = 'event-stall';
+    else if (/Forward|转发/.test(e)) c = 'event-forward';
+    else if (/Branch|冲刷|flush/i.test(e)) c = 'event-flush';
+    else if (/断点|breakpoint/i.test(e)) c = 'event-bp';
+    return `<div class="${c}">[C${s.cycle}] ${esc(e)}</div>`;
+  }).join('\n');
+  div.scrollTop = div.scrollHeight;
+}
+
+// ═══════════════ 工具 ═══════════════
+function esc(s) { return s ? s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') : ''; }
+function toast(msg, type) {
+  const t = document.createElement('div');
+  t.className = 'toast toast-'+type;
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2500);
+}
+
+// ═══════════════ 键盘 ═══════════════
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+  if (e.key === ' ' || e.code === 'Space') { e.preventDefault(); doStep(); }
+  else if (e.key === 'r' || e.key === 'R') doRun();
+  else if (e.key === 'p' || e.key === 'P') doPause();
+});
+</script>
+</body>
+</html>
